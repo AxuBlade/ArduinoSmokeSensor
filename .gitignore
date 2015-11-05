@@ -1,3 +1,11 @@
 *.xml
 *.cppproj
-__vm/.ArduinoSmokeSensor.vsarduino.h
+.vs/
+__vm/
+Debug/
+*.o
+*.d
+*.a
+*.h
+*.c
+*.cpp

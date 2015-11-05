@@ -1,60 +1,106 @@
-#include <LiquidCrystal.h>
 #include "Arduino.h"
-#include "EEPROM.h"
-//#include "prescaler.h"
+#include <avr/power.h>
 
-
-#define __btnRIGHT   0
-#define __btnUP      1
-#define __btnDOWN    2
-#define __btnLEFT    3
-#define __btnSELECT  4
-#define __btnNONE    5
-#define __lcdBckPIN  10
-
-#define __keyPIN 0
-
+#define LCD
+#define UART
 #define __sensorLEDOut 11
 #define __sensorBASEIn A1
 
 
-#define __EEPROM_ADDR A0
+#ifdef LCD
+	#include <LiquidCrystal.h>
+	#define __btnRIGHT   0
+	#define __btnUP      1
+	#define __btnDOWN    2
+	#define __btnLEFT    3
+	#define __btnSELECT  4
+	#define __btnNONE    5
+	#define __lcdBckPIN  10
+	#define __keyPIN A0
+	
+	static LiquidCrystal lcd(8, 9, 4, 5, 6, 7);
+#endif
 
+#ifdef KEYS
+	uint8_t read_LCD_buttons() {
+	static uint16_t adcKey0;      // read the value from the sensor
+	tmpResult = 0;
+	adcKey0 = adcKeyInd = analogRead(__keyPIN);
+	if(adcKey0 < 1000) {
+		for(iterator = (1<<count); iterator > 0  && ((tmpResult = analogRead(__keyPIN)) < 1000 ); --iterator);
+		if (adcKey0 < 50)   return __btnRIGHT;
+		if (adcKey0 < 250)  return __btnUP;
+		if (adcKey0 < 450)  return __btnDOWN;
+		if (adcKey0 < 650)  return __btnLEFT;
+		if (adcKey0 < 850)  return __btnSELECT;
+	}
+	return __btnNONE;
+}
+#else 
+	uint8_t read_LCD_buttons() { return 0; }
+#endif
 
-#define PS_16  (1 << ADPS2)
-#define PS_32  ((1 << ADPS2) | (1 << ADPS0))
-#define PS_64  ((1 << ADPS2) | (1 << ADPS1))
-#define PS_128 ((1 << ADPS2) | (1 << ADPS1) | (1 << ADPS0))
-
-static LiquidCrystal lcd(8, 9, 4, 5, 6, 7);
-
-unsigned long time;
-double measurement;
-
-union sEEPROM {
-	struct {
-		//uint8_t alredyProgrammed;
-		//uint8_t screenBr;
-		//uint8_t massBB;
+#ifdef MEMORY
+	#include "EEPROM.h"
+	#define __EEPROM_ADDR 0
+	union sEEPROM {
+		struct {
+			//uint8_t alredyProgrammed;
+			//uint8_t screenBr;
+			//uint8_t massBB;
+		};
+		uint8_t RAW[3];
 	};
-	uint8_t RAW[3];
-};
+
+	static union sEEPROM data;
+#endif
+
+#ifdef UART
+void write_timestamped(double measurement) {
+	Serial.print(millis());
+	Serial.print(": Voltage [V]: ");
+	Serial.println(measurement,4);
+}
+#else
+write_timestamped(double measurement) {}
+#endif
 
 
 
-static union sEEPROM data;
+static unsigned long time; // system time
+double measurement; // variable to store ADC measurement
+static double Vcc; // calibrated Vcc voltage
+volatile uint16_t iterator; // global iterator
+static uint32_t tmpResult; // temp variable for debouncing
 
+void calibrateVcc(uint8_t count) {
+	tmpResult = 0;
+	// Read 1.1V reference against AVcc
+	ADMUX = _BV(REFS0) | _BV(MUX3) | _BV(MUX2) | _BV(MUX1);
+	delay(100); // Wait for Vref to settle
+	power_timer0_disable();
+	for(iterator = (1 << count); iterator > 0; --iterator) {
+		ADCSRA |= _BV(ADSC); // Convert
+		while (bit_is_set(ADCSRA,ADSC));
+		tmpResult += (ADCH<<8) | ADCL;
+	}
+	power_timer0_enable();
+	Vcc = 1100.0 / (tmpResult >> count); // Back-calculate AVcc in mV
+}
 
-
-
-uint16_t performMeasurement() {
+void performMeasurement(uint8_t count) {
+	tmpResult = 0;
+	for(iterator = (1 << count); iterator > 0 ; --iterator) {
 	/* Generates measurement pulse */
-		uint16_t result = 0;
 		digitalWrite(__sensorLEDOut,HIGH);
 		delayMicroseconds(280);
-		result = analogRead(__sensorBASEIn); // with ADC prescaler set to 32, conversion lasts for ~15us
+		power_timer0_disable();
+		tmpResult += analogRead(__sensorBASEIn); // with ADC prescaler set to 32, conversion lasts for ~15us
 		digitalWrite(__sensorLEDOut, LOW);
-		return result;
+		power_timer0_enable();
+		delay(10);
+	}
+	measurement = ((5 * tmpResult) >> count) / 1024.0;
 }
 
 
@@ -79,67 +125,41 @@ void eeprom_write() {
 }
 */
 
+
 void setup() {
-	// setClockPrescaler(CLOCK_PRESCALER_1); // set clock speed to 1MHz
-	pinMode(__lcdBckPIN, OUTPUT); // LCD BACKLIGHT
+	power_spi_disable();
+	power_twi_disable();
+	power_timer1_disable();
+	power_timer2_disable();
+	
+	calibrateVcc(8);
+
 	pinMode(__sensorLEDOut, OUTPUT); // SENSOR LED BASE
 	pinMode(__sensorBASEIn, INPUT);	// SENSOR ANALOG OUTPUT
 	
-	analogWrite(__lcdBckPIN, 200); // LCD PWM backlight
-	lcd.begin(16, 2);              // start the library
-	Serial.begin(115200);				// initialize UART Connection
-	Serial.println("Arduino Based Smoke Sensor v. 0.1");
+	
+	#ifdef LCD	
+		pinMode(__lcdBckPIN, OUTPUT); // LCD BACKLIGHT
+		digitalWrite(__lcdBckPIN, HIGH); // LCD PWM backlight
+		lcd.begin(16, 2);              // start the library
+	#endif
 	//eeprom_read();
-
-	ADCSRA &= ~(PS_128); // Clear ADC Prescaler
-	ADCSRA |= PS_128; // set adc prescaler to 128 (250kHz)
+	#ifdef UART
+		Serial.begin(9600);				// initialize UART Connection
+		Serial.println("Smoke Sensor v.0.1");
+	#endif
 
 }
 
 
 
-uint8_t read_LCD_buttons() {
-	static uint16_t adcKey0, adcKeyInd;      // read the value from the sensor
 
-	adcKey0 = adcKeyInd = analogRead(__keyPIN);
-	if(adcKey0 < 1000) {
-		for(int i = 0; (i < 10)  && ((adcKeyInd = analogRead(__keyPIN)) < 1000 ); ++i);
-		if (adcKey0 < 50)   return __btnRIGHT;
-		if (adcKey0 < 250)  return __btnUP;
-		if (adcKey0 < 450)  return __btnDOWN;
-		if (adcKey0 < 650)  return __btnLEFT;
-		if (adcKey0 < 850)  return __btnSELECT;
-	}
-	return __btnNONE;
-}
-
-
-size_t calc_mean(uint8_t it) {
-size_t result = 0;
-for (uint8_t i = 0; i < it; ++i) {
-	result += performMeasurement();
-	delay(10);
-}
-result /= it;
-return result;
-}
-
-double normalize_to_V(size_t input) {
-return (input*5.0)/1024.0;	
-}
-
-void write_timestamped(double measurement) {
-	Serial.print("TIME: ");
-	Serial.print(millis());
-	Serial.print(" VOLTAGE: ");
-	Serial.print(measurement);
-	Serial.println("");
-	Serial.flush();
-}
 
 void loop() {
-	measurement = normalize_to_V(calc_mean(40));
+	//measurement = normalize_to_V(calc_mean(100));
+	performMeasurement(6);
 	write_timestamped(measurement);
+	#ifdef LCD
 	lcd.setCursor(0,0);
 	lcd.print("V          ");
 	lcd.setCursor(4,0);
@@ -147,6 +167,6 @@ void loop() {
 	lcd.setCursor(0,1);
 	lcd.print("BUTTON: ");
 	lcd.print(read_LCD_buttons());
-			
+#endif			
 }
 
