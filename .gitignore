@@ -9,3 +9,4 @@ Debug/
 *.h
 *.c
 *.cpp
+Makefile

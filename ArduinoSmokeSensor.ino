@@ -92,11 +92,11 @@ void performMeasurement(uint8_t count) {
 	tmpResult = 0;
 	for(iterator = (1 << count); iterator > 0 ; --iterator) {
 	/* Generates measurement pulse */
-		digitalWrite(__sensorLEDOut,HIGH);
+		digitalWrite(__sensorLEDOut,LOW);
 		delayMicroseconds(280);
 		power_timer0_disable();
 		tmpResult += analogRead(__sensorBASEIn); // with ADC prescaler set to 32, conversion lasts for ~15us
-		digitalWrite(__sensorLEDOut, LOW);
+		digitalWrite(__sensorLEDOut, HIGH);
 		power_timer0_enable();
 		delay(10);
 	}
@@ -136,6 +136,7 @@ void setup() {
 
 	pinMode(__sensorLEDOut, OUTPUT); // SENSOR LED BASE
 	pinMode(__sensorBASEIn, INPUT);	// SENSOR ANALOG OUTPUT
+	digitalWrite(__sensorLEDOut, HIGH);
 	
 	
 	#ifdef LCD	
